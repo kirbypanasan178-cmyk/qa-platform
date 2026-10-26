@@ -9,7 +9,7 @@ const ANSI_REGEX = /\u001b\[[0-9;]*[a-zA-Z]/g;
 
 // URL embedded credentials: e.g. https://admin:supersecret@domain.com or https://admin:p@ss!@domain.com
 const EMBEDDED_URL_CREDS =
-  /(https?:\/\/)([^:\s/@]+):([^/\s]+?)@(?=[^/@\s]+(?:\/|\?|#|$))/gi;
+  /(https?:\/\/)([^:\s/@]+):([^/\s]+?)@(?=[^/@\s]+(?:[\/\?#\s]|$))/gi;
 
 // Bearer & Authorization headers
 const BEARER_TOKEN = /(Bearer\s+)[A-Za-z0-9_\-\.]{15,}/gi;

@@ -11,9 +11,9 @@
 
 ## Current project status
 
-**Overall:** Phase 2 (Ingestion API & Diagnostics) Completed  
+**Overall:** Phase 4 (GitHub Issues Integration & Deduplication) Completed  
 **Last updated:** 2026-10-26  
-**Current milestone:** Ingestion API, sanitization, and deduplication verified; next is UI Dashboard Prototype.
+**Current milestone:** GitHub Issue creation, deduplication via signature hash, rate limit handling, and recovery retries completed and tested. Ready for Playwright connection / reporter integration.
 
 ## Phase 0 — Decisions and setup
 
@@ -32,12 +32,12 @@
 
 ## Phase 1 — UI prototype
 
-- [ ] Build dashboard layout.
-- [ ] Build test-run list with filters.
-- [ ] Build run details page.
-- [ ] Build failed-test detail panel.
-- [ ] Add loading, empty, error, and pagination states.
-- [ ] Use clearly labeled sample data until the API exists.
+- [x] Build dashboard layout.
+- [x] Build test-run list with filters.
+- [x] Build run details page.
+- [x] Build failed-test detail panel.
+- [x] Add loading, empty, error, and pagination states.
+- [x] Use clearly labeled sample data until the API exists. (Connected to Prisma data access with zero-state fallbacks)
 
 **Acceptance criteria:** A user can navigate the main screens and understand the intended workflow without real data.
 
@@ -49,7 +49,7 @@
 - [x] Add ingestion authentication.
 - [x] Implement `POST /api/v1/test-runs`.
 - [x] Validate and sanitize payloads.
-- [ ] Implement list/detail endpoints.
+- [x] Implement list/detail endpoints. (Implemented in lib/data/*)
 - [x] Add tests for valid, invalid, duplicate, and oversized payloads.
 
 **Acceptance criteria:** A valid test run can be submitted, persisted, and viewed in the CMS.
@@ -68,15 +68,15 @@
 
 ## Phase 4 — GitHub Issues
 
-- [ ] Choose GitHub App or fine-scoped token approach.
-- [ ] Store credentials securely on the backend.
-- [ ] Configure target repository.
-- [ ] Create a GitHub Issue from a selected failure.
-- [ ] Save the issue number and URL.
-- [ ] Add duplicate-failure detection.
-- [ ] Add sync status and error details.
-- [ ] Add retry handling for temporary failures and rate limits.
-- [ ] Test permissions and failed-sync recovery.
+- [x] Choose GitHub App or fine-scoped token approach.
+- [x] Store credentials securely on the backend.
+- [x] Configure target repository.
+- [x] Create a GitHub Issue from a selected failure.
+- [x] Save the issue number and URL.
+- [x] Add duplicate-failure detection.
+- [x] Add sync status and error details.
+- [x] Add retry handling for temporary failures and rate limits.
+- [x] Test permissions and failed-sync recovery.
 
 **Acceptance criteria:** A user can create an issue from a failure, see the issue link, and retry a failed synchronization without creating accidental duplicates.
 

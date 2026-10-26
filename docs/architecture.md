@@ -43,10 +43,10 @@ Backend API ─────── Database
 - Should support a local JSON report as a fallback if the CMS is temporarily unavailable.
 
 ### B. CMS frontend
-- Dashboard for recent runs and pass/fail trends.
-- Test-run details with failed tests and error information.
-- Failure details with a readable stack trace and available screenshots/traces.
-- Defect management view showing whether a GitHub Issue is linked, created, or needs attention.
+- Dashboard for recent runs and pass/fail trends (`/`).
+- Test-run details with failed tests and error information (`/runs`, `/runs/[id]`).
+- Failure details with a readable stack trace and available diagnostics (`/failures`, `/failures/[id]`).
+- Defect management and GitHub action controls: "Create GitHub Issue", "Open Linked Issue", and "Retry Synchronization" with audit trail.
 - Settings view for GitHub connection and project configuration, restricted to authorized users.
 
 ### C. Backend API
@@ -71,24 +71,12 @@ Access pattern:
 - Client singleton in `lib/prisma.ts` with global connection reuse in development and server-only execution guard.
 - All database credentials remain strictly server-side through `DATABASE_URL`.
 
-
-
-
-
-
-
-
-
-
-
-Use migrations and explicit foreign keys. Do not store GitHub tokens in plaintext. Store only the minimum data needed for diagnosis and audit.
-
 ### E. GitHub integration
-- Use the GitHub API to create or update Issues in the configured repository.
-- Include a concise title, reproducible failure summary, affected test, run link, environment, and sanitized error details.
-- Save the GitHub issue number and URL in the CMS.
-- Avoid creating a new issue for every repeat failure. Use a stable failure signature and check for an existing linked/open issue before creating another.
-- Treat API rate limits, network errors, permission errors, and validation errors as recoverable states with visible sync status.
+- Use the GitHub API to create or update Issues in the configured repository (`lib/github/client.ts`).
+- Include a concise title, reproducible failure summary, affected test, run link, environment, and sanitized error details (`lib/github/formatter.ts`).
+- Save the GitHub issue number and URL in the CMS (`Defect` model).
+- Avoid creating a new issue for every repeat failure: check existing `Defect` on `FailureSignature`, and query GitHub issue search by `signatureHash`.
+- Treat API rate limits, network errors, permission errors, and validation errors as recoverable states with visible sync status and audit trail (`GitHubSyncEvent`).
 
 ### F. Notifications
 - Notify authorized users when a run completes, a new failure appears, or GitHub synchronization fails.
@@ -102,27 +90,20 @@ Use migrations and explicit foreign keys. Do not store GitHub tokens in plaintex
 3. The CMS ingestion endpoint authenticates and validates it.
 4. The backend stores the run and test results.
 5. The backend calculates a failure signature for each failed test.
-6. A background job checks whether a matching defect already exists.
-7. If configured, the job creates or updates a GitHub Issue.
-8. The CMS displays the result and GitHub sync status.
+6. A background job or user action checks whether a matching defect already exists.
+7. If not already synced, creates a GitHub Issue with full sanitization.
+8. The CMS displays the result and GitHub sync status with retry capabilities.
 9. A notification is generated for relevant users.
 
-## 5. Initial API outline
+## 5. API Endpoints
 
-These are proposed routes, not existing endpoints. Confirm names and schemas during implementation.
-
-| Method | Route | Purpose |
-|---|---|---|
+| Method | Route | Purpose | Status |
+|---|---|---|---|
 | `POST` | `/api/v1/test-runs` | Submit a Playwright run | **Implemented** |
-| `GET` | `/api/v1/test-runs` | List/filter runs |
-| `GET` | `/api/v1/test-runs/:id` | Get run details |
-| `GET` | `/api/v1/failures` | List/filter failures |
-| `GET` | `/api/v1/failures/:id` | Get a failure detail |
-| `POST` | `/api/v1/failures/:id/github-issue` | Request issue creation |
-| `POST` | `/api/v1/github/webhook` | Receive configured GitHub webhook events |
 | `GET` | `/api/v1/health` | Basic health check | **Implemented** |
-
-Protect ingestion and administrative routes with appropriate authentication and authorization. Never expose a GitHub token to browser code.
+| `POST` | `/api/v1/failures/:id/github-issue` | Create or sync GitHub Issue | **Implemented** |
+| `POST` | `/api/v1/defects/:id/retry-sync` | Retry failed synchronization | **Implemented** |
+| `POST` | `/api/v1/github/webhook` | Receive configured GitHub webhook events | Planned |
 
 ### Ingestion Contract (`POST /api/v1/test-runs`)
 - **Headers:** `x-api-key: <CMS_API_KEY>` or `Authorization: Bearer <CMS_API_KEY>`
@@ -138,44 +119,49 @@ Protect ingestion and administrative routes with appropriate authentication and 
 - **Sanitization:** Automatically redacts passwords, bearer tokens, API keys, cookies, embedded URL credentials, ANSI codes, and local filesystem user paths before persistence.
 - **Deduplication:** Computes deterministic SHA-256 failure signature hashes using normalized spec files, test titles, and stripped error diagnostics.
 
+### GitHub Issue & Deduplication Workflow (`POST /api/v1/failures/:id/github-issue`)
+- **Headers:** Authorized via CMS session or `x-api-key` / `Authorization: Bearer`.
+- **Deduplication Pipeline:**
+  1. Checks existing database `Defect` on `failureSignatureId`. If already `SYNCED`, returns existing issue reference without making outbound API calls.
+  2. Protects against concurrent double-submissions: If status is `PENDING` within the last 30s, returns 409 Conflict.
+  3. Searches GitHub repository issues by `signatureHash` using `GET /search/issues` to catch issues previously created but unlinked.
+  4. Formats title `[Bug] <Test Title>: <Summary>` (max 150 chars) and markdown body with spec table, sanitized diagnostics, collapsible `<details>` stack trace, and CMS backlink.
+  5. Creates issue via `POST /repos/{owner}/{repo}/issues` with labels (`automated-defect`, `qa-failure`, `role:<role>`).
+  6. Handles transient network/5xx errors with bounded backoff; records `FAILED` status and `GitHubSyncEvent` for immediate triage.
+
+### Synchronization Recovery (`POST /api/v1/defects/:id/retry-sync`)
+- Re-executes synchronization for defects in `FAILED` status.
+- Prevents redundant duplicate creations by verifying `searchIssueByHash` before triggering creation.
+- Logs full audit history in `GitHubSyncEvent` (`CREATE`, `RETRY`, `status`, `errorMessage`).
+
 ## 6. Failure deduplication
 
-Build a stable signature from normalized fields such as:
+Build a stable signature from normalized fields:
 - project/repository
 - test title or test ID
 - normalized error name/message
 - relevant source location
 
-Remove volatile values such as timestamps, random IDs, temporary paths, and changing line values when they do not identify a different bug. Keep the original error details separately for diagnosis. Deduplication should suggest or link an existing defect; it should not hide new run occurrences.
+Remove volatile values such as timestamps, random IDs, temporary paths, and changing line values when they do not identify a different bug. Keep the original error details separately for diagnosis. Deduplication suggests or links an existing defect; it never hides new run occurrences.
 
 ## 7. Reliability and security
 
 - Use request validation and payload-size limits.
 - Use API tokens or another appropriate service authentication method for Playwright uploads.
-- Keep secrets in environment variables or a secret manager.
+- Keep secrets in environment variables or a secret manager (`GITHUB_TOKEN`, `DATABASE_URL`, `CMS_API_KEY`).
 - Redact credentials, cookies, tokens, and sensitive user data from logs and issue bodies.
 - Apply role-based access to project settings and GitHub configuration.
-- Use background retries with bounded attempts and backoff for temporary GitHub failures.
+- Use bounded retries and backoff for temporary GitHub failures.
 - Make ingestion idempotent where possible so retries do not create duplicate runs or issues.
 - Record sync attempts and errors without logging secrets.
 - Add database backups and retention rules before production use.
 
 ## 8. Recommended implementation phases
 
-1. **Foundation:** choose stack, create CMS app, configure database, environment variables, linting, and migrations.
-2. **Manual data prototype:** build dashboard using sample run data.
-3. **Ingestion:** accept real Playwright results and display run details.
-4. **GitHub:** securely connect a repository and create issues from a failure.
-5. **Deduplication and sync recovery:** link repeat failures, add retries and sync history.
+1. **Foundation:** choose stack, create CMS app, configure database, environment variables, linting, and migrations. (Completed)
+2. **Data Model & Ingestion:** accept real Playwright results, validate, sanitize, and persist with idempotency. (Completed)
+3. **Operations Dashboard:** browse runs, examine failures, review sanitized traces. (Completed)
+4. **GitHub Integration & Deduplication:** securely connect repository, create deduplicated issues, track sync events, handle retries. (Completed)
+5. **Playwright Reporter Connection:** custom reporter uploading directly from test suites with offline fallback. (Next)
 6. **Notifications:** add in-app alerts and user preferences.
-7. **CI and hardening:** run automated tests, add permissions, deployment, monitoring, and documentation.
-
-## 9. Architecture decisions to confirm
-
-Before production implementation, decide:
-- Frontend/backend framework and database.
-- Whether authentication is local, organization SSO, or GitHub OAuth.
-- Whether uploads come from developer machines, CI, or both.
-- Whether GitHub App installation or a fine-scoped token is used.
-- Which notification channels are required.
-- How long test artifacts and raw logs are retained.
+7. **CI and Hardening:** run automated tests, add permissions, deployment, monitoring, and documentation.
