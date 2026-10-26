@@ -1,0 +1,166 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum RunStatus {
+  PASSED
+  FAILED
+  PARTIAL
+  RUNNING
+}
+
+enum TestStatus {
+  PASSED
+  FAILED
+  SKIPPED
+  TIMED_OUT
+}
+
+enum SyncStatus {
+  PENDING
+  SYNCED
+  FAILED
+}
+
+enum SyncAction {
+  CREATE
+  RETRY
+  COMMENT
+}
+
+enum SyncEventStatus {
+  SUCCESS
+  ERROR
+}
+
+model Project {
+  id            String   @id @default(cuid())
+  key           String   @unique
+  name          String
+  repositoryUrl String
+  apiKeyHash    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  testRuns TestRun[]
+  defects  Defect[]
+
+  @@index([key])
+}
+
+model TestRun {
+  id             String    @id @default(cuid())
+  projectId      String
+  project        Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  idempotencyKey String?   @unique
+  runNumber      Int?
+  branch       String?
+  commitSha    String?
+  environment  String?
+  triggeredBy  String?
+  status       RunStatus @default(RUNNING)
+  totalTests   Int       @default(0)
+  passedCount  Int       @default(0)
+  failedCount  Int       @default(0)
+  skippedCount Int       @default(0)
+  durationMs   Int       @default(0)
+  startedAt    DateTime  @default(now())
+  completedAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  testResults TestResult[]
+
+  @@index([projectId, createdAt])
+  @@index([status])
+  @@index([idempotencyKey])
+}
+
+model TestResult {
+  id         String     @id @default(cuid())
+  testRunId  String
+  testRun    TestRun    @relation(fields: [testRunId], references: [id], onDelete: Cascade)
+  suiteTitle String?
+  testTitle  String
+  specFile   String
+  role       String?
+  status     TestStatus @default(PASSED)
+  durationMs Int        @default(0)
+  retryCount Int        @default(0)
+  createdAt  DateTime   @default(now())
+
+  failureDetail FailureDetail?
+
+  @@index([testRunId])
+  @@index([status])
+  @@index([role])
+}
+
+model FailureSignature {
+  id              String   @id @default(cuid())
+  signatureHash   String   @unique
+  errorType       String?
+  normalizedError String
+  firstSeenAt     DateTime @default(now())
+  lastSeenAt      DateTime @default(now())
+  occurrenceCount Int      @default(1)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  failureDetails FailureDetail[]
+  defect         Defect?
+
+  @@index([signatureHash])
+  @@index([lastSeenAt])
+}
+
+model FailureDetail {
+  id                    String           @id @default(cuid())
+  testResultId          String           @unique
+  testResult            TestResult       @relation(fields: [testResultId], references: [id], onDelete: Cascade)
+  failureSignatureId    String
+  failureSignature      FailureSignature @relation(fields: [failureSignatureId], references: [id], onDelete: Cascade)
+  rawErrorMessage       String?
+  sanitizedErrorMessage String
+  sanitizedStackTrace   String?
+  createdAt             DateTime         @default(now())
+
+  @@index([failureSignatureId])
+}
+
+model Defect {
+  id                 String           @id @default(cuid())
+  projectId          String
+  project            Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  failureSignatureId String           @unique
+  failureSignature   FailureSignature @relation(fields: [failureSignatureId], references: [id], onDelete: Cascade)
+  githubIssueNumber  Int?
+  githubIssueUrl     String?
+  issueTitle         String
+  syncStatus         SyncStatus       @default(PENDING)
+  lastSyncError      String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  syncEvents GitHubSyncEvent[]
+
+  @@index([projectId])
+  @@index([syncStatus])
+  @@index([githubIssueNumber])
+}
+
+model GitHubSyncEvent {
+  id           String          @id @default(cuid())
+  defectId     String
+  defect       Defect          @relation(fields: [defectId], references: [id], onDelete: Cascade)
+  action       SyncAction      @default(CREATE)
+  status       SyncEventStatus
+  errorMessage String?
+  attemptedAt  DateTime        @default(now())
+
+  @@index([defectId, attemptedAt])
+}
