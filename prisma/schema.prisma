@@ -49,8 +49,26 @@ model Project {
 
   testRuns TestRun[]
   defects  Defect[]
+  gitHubConfig GitHubConfig?
 
   @@index([key])
+}
+
+model GitHubConfig {
+  id             String   @id @default(cuid())
+  projectId      String   @unique
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  isConnected    Boolean  @default(true)
+  accountLogin   String?
+  accountType    String?
+  installationId String?
+  token          String?
+  targetOwner    String
+  targetRepo     String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([projectId])
 }
 
 model TestRun {
@@ -138,6 +156,8 @@ model Defect {
   project            Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   failureSignatureId String           @unique
   failureSignature   FailureSignature @relation(fields: [failureSignatureId], references: [id], onDelete: Cascade)
+  githubOwner        String?
+  githubRepo         String?
   githubIssueNumber  Int?
   githubIssueUrl     String?
   issueTitle         String
@@ -151,6 +171,7 @@ model Defect {
   @@index([projectId])
   @@index([syncStatus])
   @@index([githubIssueNumber])
+  @@index([githubOwner, githubRepo])
 }
 
 model GitHubSyncEvent {

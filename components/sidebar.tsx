@@ -8,6 +8,7 @@ import {
   PlaySquare,
   AlertOctagon,
   ShieldCheck,
+  Settings,
 } from "lucide-react";
 
 export function Sidebar() {
@@ -17,6 +18,7 @@ export function Sidebar() {
     { name: "Overview", href: "/", icon: LayoutDashboard },
     { name: "Test Runs", href: "/runs", icon: PlaySquare },
     { name: "Failures", href: "/failures", icon: AlertOctagon },
+    { name: "Settings", href: "/settings", icon: Settings },
   ];
 
   return (

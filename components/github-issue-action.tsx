@@ -21,6 +21,8 @@ export interface SyncEventItem {
 
 export interface DefectItem {
   id: string;
+  githubOwner?: string | null;
+  githubRepo?: string | null;
   githubIssueNumber?: number | null;
   githubIssueUrl?: string | null;
   issueTitle?: string;
@@ -141,7 +143,9 @@ export function GitHubIssueAction({
           </div>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
             {syncStatus === "SYNCED"
-              ? "This recurring failure is actively linked to an automated GitHub Issue."
+              ? `This recurring failure is actively linked to an automated GitHub Issue${
+                  defect?.githubOwner && defect?.githubRepo ? ` in ${defect.githubOwner}/${defect.githubRepo}` : ""
+                }.`
               : syncStatus === "FAILED"
               ? "Synchronization encountered an error. You can safely retry without creating duplicates."
               : "Generate an automated GitHub defect issue deduplicated against this signature hash."}

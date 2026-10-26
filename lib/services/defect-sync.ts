@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { GitHubClient, GitHubApiError } from "@/lib/github/client";
 import { formatGitHubIssue } from "@/lib/github/formatter";
+import { resolveProjectGitHubClient } from "@/lib/services/github-settings";
 import { SyncStatus, SyncAction, SyncEventStatus } from "@prisma/client";
 
 export class DefectSyncError extends Error {
@@ -27,6 +28,8 @@ export interface SyncDefectResult {
     id: string;
     projectId: string;
     failureSignatureId: string;
+    githubOwner?: string | null;
+    githubRepo?: string | null;
     githubIssueNumber: number | null;
     githubIssueUrl: string | null;
     issueTitle: string;
@@ -44,15 +47,13 @@ export interface DefectSyncOptions {
 }
 
 /**
- * Creates or synchronizes a GitHub issue for a given failure signature.
+ * Creates or synchronizes a GitHub issue for a given failure signature in the configured repository.
  * Enforces deduplication across existing database records and remote GitHub search.
  */
 export async function createOrSyncDefect(
   failureSignatureId: string,
   options?: DefectSyncOptions
 ): Promise<SyncDefectResult> {
-  const client = options?.githubClient || new GitHubClient();
-
   // 1. Fetch Failure Signature with its existing Defect and diagnostic samples
   const signature = await prisma.failureSignature.findUnique({
     where: { id: failureSignatureId },
@@ -90,7 +91,44 @@ export async function createOrSyncDefect(
     projectId = defaultProject.id;
   }
 
-  // 2. Check Existing Defect Record
+  // 2. Resolve target GitHub client and target repository
+  let client: GitHubClient;
+  let targetOwner = "";
+  let targetRepo = "";
+
+  if (options?.githubClient) {
+    client = options.githubClient;
+    const clientOwner = typeof client.getDefaultOwner === "function" ? client.getDefaultOwner() : "";
+    const clientRepo = typeof client.getDefaultRepo === "function" ? client.getDefaultRepo() : "";
+    targetOwner = clientOwner;
+    targetRepo = clientRepo;
+
+    if (!targetOwner || !targetRepo) {
+      try {
+        const resolved = await resolveProjectGitHubClient(projectId);
+        targetOwner = targetOwner || resolved.owner;
+        targetRepo = targetRepo || resolved.repo;
+      } catch {
+        // Fallback
+      }
+      targetOwner = targetOwner || process.env.GITHUB_OWNER || "mock-owner";
+      targetRepo = targetRepo || process.env.GITHUB_REPO || "mock-repo";
+    }
+  } else {
+    const resolved = await resolveProjectGitHubClient(projectId);
+    client = resolved.client;
+    targetOwner = resolved.owner;
+    targetRepo = resolved.repo;
+  }
+
+  if (!targetOwner || !targetRepo) {
+    throw new DefectSyncError(
+      "Target GitHub repository is not configured. Please select a repository in Settings.",
+      400
+    );
+  }
+
+  // 3. Check Existing Defect Record
   if (signature.defect) {
     if (signature.defect.syncStatus === SyncStatus.SYNCED) {
       return {
@@ -109,14 +147,20 @@ export async function createOrSyncDefect(
     }
   }
 
-  // 3. Search Remote GitHub Issues to avoid creating duplicates (Deduplication via Hash)
-  const existingRemoteIssue = await client.searchIssueByHash(signature.signatureHash);
+  // 4. Search Remote GitHub Issues in target repository to avoid duplicate issues
+  const existingRemoteIssue = await client.searchIssueByHash(signature.signatureHash, {
+    owner: targetOwner,
+    repo: targetRepo,
+  });
+
   if (existingRemoteIssue) {
     const defect = await prisma.defect.upsert({
       where: { failureSignatureId },
       create: {
         projectId,
         failureSignatureId,
+        githubOwner: targetOwner,
+        githubRepo: targetRepo,
         githubIssueNumber: existingRemoteIssue.number,
         githubIssueUrl: existingRemoteIssue.url,
         issueTitle: existingRemoteIssue.title,
@@ -124,6 +168,8 @@ export async function createOrSyncDefect(
         lastSyncError: null,
       },
       update: {
+        githubOwner: targetOwner,
+        githubRepo: targetRepo,
         githubIssueNumber: existingRemoteIssue.number,
         githubIssueUrl: existingRemoteIssue.url,
         issueTitle: existingRemoteIssue.title,
@@ -148,35 +194,41 @@ export async function createOrSyncDefect(
     };
   }
 
-  // 4. Format Issue Payload
+  // 5. Format Issue Payload
   const formatted = formatGitHubIssue({
     failureSignature: signature,
     sampleDetail: signature.failureDetails[0],
     cmsBaseUrl: options?.cmsBaseUrl,
   });
 
-  // 5. Mark Defect as PENDING before initiating network call
+  // 6. Mark Defect as PENDING with the targeted repository before initiating network call
   let defect = await prisma.defect.upsert({
     where: { failureSignatureId },
     create: {
       projectId,
       failureSignatureId,
+      githubOwner: targetOwner,
+      githubRepo: targetRepo,
       issueTitle: formatted.title,
       syncStatus: SyncStatus.PENDING,
       lastSyncError: null,
     },
     update: {
+      githubOwner: targetOwner,
+      githubRepo: targetRepo,
       issueTitle: formatted.title,
       syncStatus: SyncStatus.PENDING,
       lastSyncError: null,
     },
   });
 
-  // 6. Execute Issue Creation with 1 transient retry on 5xx/network errors
+  // 7. Execute Issue Creation in the target repository with 1 transient retry on 5xx/network errors
   try {
     let created;
     try {
       created = await client.createIssue({
+        owner: targetOwner,
+        repo: targetRepo,
         title: formatted.title,
         body: formatted.body,
         labels: formatted.labels,
@@ -190,6 +242,8 @@ export async function createOrSyncDefect(
         // Wait 1000ms bounded backoff and retry once
         await new Promise((res) => setTimeout(res, 1000));
         created = await client.createIssue({
+          owner: targetOwner,
+          repo: targetRepo,
           title: formatted.title,
           body: formatted.body,
           labels: formatted.labels,
@@ -199,11 +253,13 @@ export async function createOrSyncDefect(
       }
     }
 
-    // 7. On Success: Update Defect & record Sync Event
+    // 8. On Success: Update Defect & record Sync Event
     defect = await prisma.defect.update({
       where: { id: defect.id },
       data: {
         syncStatus: SyncStatus.SYNCED,
+        githubOwner: targetOwner,
+        githubRepo: targetRepo,
         githubIssueNumber: created.number,
         githubIssueUrl: created.url,
         issueTitle: created.title,
@@ -230,7 +286,6 @@ export async function createOrSyncDefect(
     const status = err instanceof GitHubApiError ? err.status : 500;
     const isRetryable = status >= 500 || (err instanceof GitHubApiError && err.isRateLimit);
 
-    // Update Defect with FAILED status
     defect = await prisma.defect.update({
       where: { id: defect.id },
       data: {
@@ -254,13 +309,12 @@ export async function createOrSyncDefect(
 
 /**
  * Retries a previously failed Defect synchronization.
+ * Preserves the defect's originally designated target repository.
  */
 export async function retryDefectSync(
   defectId: string,
   options?: DefectSyncOptions
 ): Promise<SyncDefectResult> {
-  const client = options?.githubClient || new GitHubClient();
-
   const defect = await prisma.defect.findUnique({
     where: { id: defectId },
     include: {
@@ -298,12 +352,52 @@ export async function retryDefectSync(
     }
   }
 
+  // Preserve designated repository from defect record; fallback to current configuration if not set
+  let targetOwner = defect.githubOwner || "";
+  let targetRepo = defect.githubRepo || "";
+  let client: GitHubClient;
+
+  if (options?.githubClient) {
+    client = options.githubClient;
+    const clientOwner = typeof client.getDefaultOwner === "function" ? client.getDefaultOwner() : "";
+    const clientRepo = typeof client.getDefaultRepo === "function" ? client.getDefaultRepo() : "";
+    targetOwner = targetOwner || clientOwner;
+    targetRepo = targetRepo || clientRepo;
+
+    if (!targetOwner || !targetRepo) {
+      try {
+        const resolved = await resolveProjectGitHubClient(defect.projectId);
+        targetOwner = targetOwner || resolved.owner;
+        targetRepo = targetRepo || resolved.repo;
+      } catch {
+        // Fallback
+      }
+      targetOwner = targetOwner || process.env.GITHUB_OWNER || "mock-owner";
+      targetRepo = targetRepo || process.env.GITHUB_REPO || "mock-repo";
+    }
+  } else {
+    const resolved = await resolveProjectGitHubClient(defect.projectId);
+    client = resolved.client;
+    targetOwner = targetOwner || resolved.owner;
+    targetRepo = targetRepo || resolved.repo;
+  }
+
+  if (!targetOwner || !targetRepo) {
+    throw new DefectSyncError("Target GitHub repository is not configured for retry", 400);
+  }
+
   // Deduplication check via search in case an issue was created during an earlier attempt
-  const existingRemoteIssue = await client.searchIssueByHash(defect.failureSignature.signatureHash);
+  const existingRemoteIssue = await client.searchIssueByHash(
+    defect.failureSignature.signatureHash,
+    { owner: targetOwner, repo: targetRepo }
+  );
+
   if (existingRemoteIssue) {
     const updatedDefect = await prisma.defect.update({
       where: { id: defect.id },
       data: {
+        githubOwner: targetOwner,
+        githubRepo: targetRepo,
         githubIssueNumber: existingRemoteIssue.number,
         githubIssueUrl: existingRemoteIssue.url,
         issueTitle: existingRemoteIssue.title,
@@ -346,6 +440,8 @@ export async function retryDefectSync(
 
   try {
     const created = await client.createIssue({
+      owner: targetOwner,
+      repo: targetRepo,
       title: formatted.title,
       body: formatted.body,
       labels: formatted.labels,
@@ -355,6 +451,8 @@ export async function retryDefectSync(
       where: { id: defect.id },
       data: {
         syncStatus: SyncStatus.SYNCED,
+        githubOwner: targetOwner,
+        githubRepo: targetRepo,
         githubIssueNumber: created.number,
         githubIssueUrl: created.url,
         issueTitle: created.title,

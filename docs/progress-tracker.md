@@ -66,7 +66,7 @@
 
 **Acceptance criteria:** A real Playwright run appears in the CMS with correct pass/fail counts and useful failure details.
 
-## Phase 4 — GitHub Issues
+## Phase 4 — GitHub Issues & Configurable Repository Selection
 
 - [x] Choose GitHub App or fine-scoped token approach.
 - [x] Store credentials securely on the backend.
@@ -77,6 +77,12 @@
 - [x] Add sync status and error details.
 - [x] Add retry handling for temporary failures and rate limits.
 - [x] Test permissions and failed-sync recovery.
+- [x] Configurable GitHub repository selection through Settings dashboard.
+- [x] Connect/disconnect workflow with authorization status display.
+- [x] Accessible repository loader filtering unauthorized repositories.
+- [x] Dynamic default repository selection with PostgreSQL persistence.
+- [x] Defect repository preservation: existing defects retain original repo identity when default changes.
+- [x] Manual sandbox verification issue creation endpoint and dashboard action.
 
 **Acceptance criteria:** A user can create an issue from a failure, see the issue link, and retry a failed synchronization without creating accidental duplicates.
 
