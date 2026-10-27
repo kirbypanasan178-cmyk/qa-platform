@@ -11,9 +11,9 @@
 
 ## Current project status
 
-**Overall:** Phase 5 (Playwright Automation Suite Integration & Reporting) Completed  
-**Last updated:** 2026-10-26  
-**Current milestone:** Custom Playwright reporter, client-side sanitizer, resilient uploader with bounded backoff, offline fallback, and full end-to-end integration across all 5 roles (`intern`, `coordinator`, `supervisor`, `admin`, `superadmin`) completed and verified.
+**Overall:** Phase 6 (AI & Rule-Based Test Failure Investigation & Triage) Completed  
+**Last updated:** 2026-10-27  
+**Current milestone:** Deterministic rule-based failure analyzer, separate investigation persistence, admin triage dashboard (/investigations), audit trail, and GitHub issue gating for confirmed bugs completed and verified.
 
 ## Phase 0 — Decisions and setup
 
@@ -82,11 +82,30 @@
 - [x] Accessible repository loader filtering unauthorized repositories.
 - [x] Dynamic default repository selection with PostgreSQL persistence.
 - [x] Defect repository preservation: existing defects retain original repo identity when default changes.
+- [x] Dynamic retry for uncreated defects: Retrying defects that never successfully created an issue adopts the project's current repository configuration.
 - [x] Manual sandbox verification issue creation endpoint and dashboard action.
 
 **Acceptance criteria:** A user can create an issue from a failure, see the issue link, and retry a failed synchronization without creating accidental duplicates.
 
-## Phase 5 — Notifications
+## Phase 6 — AI & Rule-Based Test Failure Investigation & Triage
+
+- [x] Extend Prisma schema with isolated `Investigation` and `InvestigationHistory` models and enums.
+- [x] Generate and apply PostgreSQL migration `20261027032413_add_failure_investigations`.
+- [x] Implement pluggable `FailureAnalyzer` interface and deterministic `RuleBasedFailureAnalyzer`.
+- [x] Classify failures into `APPLICATION_BUG`, `FLAKY_TEST`, `TEST_DEFECT`, and `INCONCLUSIVE`.
+- [x] Enforce Requirement 5: Passing retries without timing/DOM artifacts are treated conservatively and not marked flaky.
+- [x] Add backward-compatible optional diagnostic fields (`expected`, `actual`, `testId`, `executionLogs`, `apiResponses`).
+- [x] Integrate automated analysis into `processTestRunIngestion` pipeline inside atomic transaction.
+- [x] Implement admin triage service and secure action API (`/api/v1/investigations/[id]/action`).
+- [x] Implement triage actions: Confirm Bug, Request Rerun, Mark Test Defect, and Reject Assessment.
+- [x] Enforce Requirement 9: Restrict GitHub issue creation strictly to confirmed bugs (`DefectSyncError` 403 on unconfirmed failures).
+- [x] Build admin investigation hub (`/investigations`), detail view (`/investigations/[id]`), and triage action controls.
+- [x] Connect investigation status into failure details view (`/failures/[id]`) and lock unconfirmed issue creation.
+- [x] Add automated unit and API test suites with 100% pass rate.
+
+**Acceptance criteria:** Failures are automatically analyzed and categorized upon ingestion, admins can triage and record audit notes, unconfirmed failures cannot create GitHub issues, and tests pass with 0 regressions.
+
+## Phase 7 — Notifications
 
 - [ ] Define notification events.
 - [ ] Add in-app notification storage and display.

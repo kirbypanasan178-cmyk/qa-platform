@@ -38,6 +38,21 @@ enum SyncEventStatus {
   ERROR
 }
 
+enum InvestigationClassification {
+  APPLICATION_BUG
+  FLAKY_TEST
+  TEST_DEFECT
+  INCONCLUSIVE
+}
+
+enum InvestigationStatus {
+  PENDING_REVIEW
+  CONFIRMED_BUG
+  RERUN_REQUESTED
+  TEST_DEFECT_MARKED
+  REJECTED
+}
+
 model Project {
   id            String   @id @default(cuid())
   key           String   @unique
@@ -112,6 +127,7 @@ model TestResult {
   createdAt  DateTime   @default(now())
 
   failureDetail FailureDetail?
+  investigation Investigation?
 
   @@index([testRunId])
   @@index([status])
@@ -146,6 +162,8 @@ model FailureDetail {
   sanitizedErrorMessage String
   sanitizedStackTrace   String?
   createdAt             DateTime         @default(now())
+
+  investigations        Investigation[]
 
   @@index([failureSignatureId])
 }
@@ -184,4 +202,48 @@ model GitHubSyncEvent {
   attemptedAt  DateTime        @default(now())
 
   @@index([defectId, attemptedAt])
+}
+
+model Investigation {
+  id                String                      @id @default(cuid())
+  testResultId      String                      @unique
+  testResult        TestResult                  @relation(fields: [testResultId], references: [id], onDelete: Cascade)
+  failureDetailId   String?
+  failureDetail     FailureDetail?              @relation(fields: [failureDetailId], references: [id], onDelete: SetNull)
+  classification    InvestigationClassification @default(INCONCLUSIVE)
+  confidenceScore   Int                         @default(50)
+  summary           String
+  recommendedAction String
+  detectedPatterns  String[]                    @default([])
+  expectedResult    String?
+  actualResult      String?
+  apiResponses      Json?
+  executionLogs     String[]                    @default([])
+  status            InvestigationStatus         @default(PENDING_REVIEW)
+  adminNotes        String?
+  reviewedBy        String?
+  reviewedAt        DateTime?
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+
+  history           InvestigationHistory[]
+
+  @@index([classification])
+  @@index([status])
+  @@index([createdAt])
+  @@index([failureDetailId])
+}
+
+model InvestigationHistory {
+  id              String              @id @default(cuid())
+  investigationId String
+  investigation   Investigation       @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  fromStatus      InvestigationStatus
+  toStatus        InvestigationStatus
+  action          String
+  notes           String?
+  performedBy     String?
+  createdAt       DateTime            @default(now())
+
+  @@index([investigationId, createdAt])
 }

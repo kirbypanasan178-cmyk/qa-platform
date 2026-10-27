@@ -44,6 +44,7 @@ export interface SyncDefectResult {
 export interface DefectSyncOptions {
   githubClient?: GitHubClient;
   cmsBaseUrl?: string;
+  bypassInvestigationCheck?: boolean;
 }
 
 /**
@@ -68,6 +69,7 @@ export async function createOrSyncDefect(
               testRun: {
                 select: { projectId: true },
               },
+              investigation: true,
             },
           },
         },
@@ -77,6 +79,19 @@ export async function createOrSyncDefect(
 
   if (!signature) {
     throw new DefectSyncError("Failure signature not found", 404);
+  }
+
+  // Enforce investigation confirmation: Never create issues for unconfirmed failures
+  const latestResult = signature.failureDetails[0]?.testResult;
+  if (
+    latestResult?.investigation &&
+    latestResult.investigation.status !== "CONFIRMED_BUG" &&
+    !options?.bypassInvestigationCheck
+  ) {
+    throw new DefectSyncError(
+      `GitHub issues can only be created for confirmed bugs. Current investigation status is '${latestResult.investigation.status}'.`,
+      403
+    );
   }
 
   // Determine Project ID
@@ -352,17 +367,19 @@ export async function retryDefectSync(
     }
   }
 
-  // Preserve designated repository from defect record; fallback to current configuration if not set
-  let targetOwner = defect.githubOwner || "";
-  let targetRepo = defect.githubRepo || "";
+  // When an issue has never been successfully created, retry using the project's current repository configuration.
+  const hasNeverSynced = !defect.githubIssueNumber;
+
+  let targetOwner = hasNeverSynced ? "" : (defect.githubOwner || "");
+  let targetRepo = hasNeverSynced ? "" : (defect.githubRepo || "");
   let client: GitHubClient;
 
   if (options?.githubClient) {
     client = options.githubClient;
     const clientOwner = typeof client.getDefaultOwner === "function" ? client.getDefaultOwner() : "";
     const clientRepo = typeof client.getDefaultRepo === "function" ? client.getDefaultRepo() : "";
-    targetOwner = targetOwner || clientOwner;
-    targetRepo = targetRepo || clientRepo;
+    targetOwner = clientOwner || targetOwner;
+    targetRepo = clientRepo || targetRepo;
 
     if (!targetOwner || !targetRepo) {
       try {
@@ -372,14 +389,14 @@ export async function retryDefectSync(
       } catch {
         // Fallback
       }
-      targetOwner = targetOwner || process.env.GITHUB_OWNER || "mock-owner";
-      targetRepo = targetRepo || process.env.GITHUB_REPO || "mock-repo";
+      targetOwner = targetOwner || defect.githubOwner || process.env.GITHUB_OWNER || "mock-owner";
+      targetRepo = targetRepo || defect.githubRepo || process.env.GITHUB_REPO || "mock-repo";
     }
   } else {
     const resolved = await resolveProjectGitHubClient(defect.projectId);
     client = resolved.client;
-    targetOwner = targetOwner || resolved.owner;
-    targetRepo = targetRepo || resolved.repo;
+    targetOwner = targetOwner || resolved.owner || defect.githubOwner || "";
+    targetRepo = targetRepo || resolved.repo || defect.githubRepo || "";
   }
 
   if (!targetOwner || !targetRepo) {
@@ -484,6 +501,8 @@ export async function retryDefectSync(
       data: {
         syncStatus: SyncStatus.FAILED,
         lastSyncError: errorMsg,
+        githubOwner: targetOwner,
+        githubRepo: targetRepo,
       },
     });
 

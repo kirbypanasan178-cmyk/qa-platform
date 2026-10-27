@@ -34,11 +34,15 @@ export interface DefectItem {
 export interface GitHubIssueActionProps {
   failureSignatureId: string;
   initialDefect?: DefectItem | null;
+  investigationStatus?: string | null;
+  investigationId?: string | null;
 }
 
 export function GitHubIssueAction({
   failureSignatureId,
   initialDefect,
+  investigationStatus,
+  investigationId,
 }: GitHubIssueActionProps) {
   const router = useRouter();
   const [defect, setDefect] = useState<DefectItem | null>(initialDefect || null);
@@ -155,23 +159,49 @@ export function GitHubIssueAction({
         <div>
           {/* State 1: No Defect Linked */}
           {!syncStatus && (
-            <button
-              onClick={handleCreateIssue}
-              disabled={loading}
-              className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-4 py-2 text-xs font-medium text-white shadow-xs hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200 transition-colors"
-            >
-              {loading ? (
-                <>
-                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                  Creating Issue...
-                </>
+            <div className="flex flex-col items-end gap-1.5">
+              {investigationStatus && investigationStatus !== "CONFIRMED_BUG" ? (
+                <div className="flex flex-col items-end gap-1">
+                  <button
+                    disabled
+                    title="Issue creation is locked until an administrator reviews and confirms this failure as a bug."
+                    className="inline-flex items-center gap-2 rounded-lg bg-zinc-200 px-4 py-2 text-xs font-medium text-zinc-500 cursor-not-allowed dark:bg-zinc-800 dark:text-zinc-400"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Create GitHub Issue (Locked)
+                  </button>
+                  <span className="text-[11px] text-amber-600 dark:text-amber-400">
+                    Requires Admin Confirmation (Status: {investigationStatus.replace("_", " ")})
+                  </span>
+                  {investigationId && (
+                    <a
+                      href={`/investigations/${investigationId}`}
+                      className="text-[11px] font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                    >
+                      Review in Investigations →
+                    </a>
+                  )}
+                </div>
               ) : (
-                <>
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  Create GitHub Issue
-                </>
+                <button
+                  onClick={handleCreateIssue}
+                  disabled={loading}
+                  className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-4 py-2 text-xs font-medium text-white shadow-xs hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200 transition-colors"
+                >
+                  {loading ? (
+                    <>
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                      Creating Issue...
+                    </>
+                  ) : (
+                    <>
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      Create GitHub Issue
+                    </>
+                  )}
+                </button>
               )}
-            </button>
+            </div>
           )}
 
           {/* State 2: Synced */}

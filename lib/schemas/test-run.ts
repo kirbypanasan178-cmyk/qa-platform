@@ -7,6 +7,8 @@ export const FailureDetailInputSchema = z.object({
   message: z.string().min(1, "Error message must not be empty").max(10000),
   stackTrace: z.string().max(50000).optional().nullable(),
   errorType: z.string().max(100).optional().nullable(),
+  expected: z.string().max(5000).optional().nullable(),
+  actual: z.string().max(5000).optional().nullable(),
 });
 
 export const TestResultInputSchema = z.object({
@@ -18,6 +20,9 @@ export const TestResultInputSchema = z.object({
   durationMs: z.number().int().min(0).default(0),
   retryCount: z.number().int().min(0).default(0),
   error: FailureDetailInputSchema.optional().nullable(),
+  testId: z.string().max(200).optional().nullable(),
+  executionLogs: z.array(z.string().max(5000)).max(200).optional().nullable(),
+  apiResponses: z.array(z.any()).max(50).optional().nullable(),
 });
 
 export const TestRunIngestionSchema = z.object({

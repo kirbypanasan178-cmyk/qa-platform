@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
 import { createOrSyncDefect, retryDefectSync, DefectSyncError } from "@/lib/services/defect-sync";
 import { GitHubClient, GitHubApiError } from "@/lib/github/client";
@@ -14,30 +14,51 @@ describe("Defect Sync with Dynamic Repository Selection", () => {
     process.env.GITHUB_OWNER = "sandbox-owner";
     process.env.GITHUB_REPO = "sandbox-repo";
 
-    // Clean DB
-    await prisma.gitHubSyncEvent.deleteMany();
-    await prisma.defect.deleteMany();
-    await prisma.gitHubConfig.deleteMany();
-    await prisma.failureDetail.deleteMany();
-    await prisma.failureSignature.deleteMany();
-    await prisma.testResult.deleteMany();
-    await prisma.testRun.deleteMany();
-    await prisma.project.deleteMany();
+    // Clean test-specific records
+    await prisma.gitHubSyncEvent.deleteMany({
+      where: { defect: { projectId: "proj-repo-test" } },
+    });
+    await prisma.defect.deleteMany({
+      where: { projectId: "proj-repo-test" },
+    });
+    await prisma.failureDetail.deleteMany({
+      where: { id: "fd-repo-1" },
+    });
+    await prisma.failureSignature.deleteMany({
+      where: { id: { in: ["sig-repo-1", "sig-repo-2"] } },
+    });
+    await prisma.testResult.deleteMany({
+      where: { id: "tr-repo-1" },
+    });
+    await prisma.testRun.deleteMany({
+      where: { id: "run-repo-test" },
+    });
 
-    // Create Seed Project
-    const project = await prisma.project.create({
-      data: {
+    // Ensure Seed Project exists
+    const project = await prisma.project.upsert({
+      where: { id: "proj-repo-test" },
+      create: {
         id: "proj-repo-test",
         key: "dtr-internship",
         name: "Internship DTR",
         repositoryUrl: "https://github.com/production-owner/internship-dtr",
       },
+      update: {
+        key: "dtr-internship",
+        name: "Internship DTR",
+      },
     });
 
     // Create GitHub Config targeting Sandbox Repo initially
-    await prisma.gitHubConfig.create({
-      data: {
+    await prisma.gitHubConfig.upsert({
+      where: { projectId: project.id },
+      create: {
         projectId: project.id,
+        isConnected: true,
+        targetOwner: "sandbox-owner",
+        targetRepo: "sandbox-repo",
+      },
+      update: {
         isConnected: true,
         targetOwner: "sandbox-owner",
         targetRepo: "sandbox-repo",
@@ -90,6 +111,44 @@ describe("Defect Sync with Dynamic Repository Selection", () => {
 
   afterEach(() => {
     process.env = { ...originalEnv };
+  });
+
+  afterAll(async () => {
+    // Clean up test records
+    await prisma.gitHubSyncEvent.deleteMany({
+      where: { defect: { projectId: "proj-repo-test" } },
+    });
+    await prisma.defect.deleteMany({
+      where: { projectId: "proj-repo-test" },
+    });
+    await prisma.failureDetail.deleteMany({
+      where: { id: "fd-repo-1" },
+    });
+    await prisma.failureSignature.deleteMany({
+      where: { id: { in: ["sig-repo-1", "sig-repo-2"] } },
+    });
+    await prisma.testResult.deleteMany({
+      where: { id: "tr-repo-1" },
+    });
+    await prisma.testRun.deleteMany({
+      where: { id: "run-repo-test" },
+    });
+
+    // Restore project GitHubConfig to user's saved repository
+    await prisma.gitHubConfig.upsert({
+      where: { projectId: "proj-repo-test" },
+      create: {
+        projectId: "proj-repo-test",
+        isConnected: true,
+        targetOwner: "KiyoshiGamer",
+        targetRepo: "MERN-STACK",
+      },
+      update: {
+        isConnected: true,
+        targetOwner: "KiyoshiGamer",
+        targetRepo: "MERN-STACK",
+      },
+    });
   });
 
   it("creates issue in configured sandbox repository and stores repository identity on defect", async () => {
@@ -195,8 +254,8 @@ describe("Defect Sync with Dynamic Repository Selection", () => {
     expect(allDefects.find((d) => d.id !== "defect-sandbox")?.githubOwner).toBe("production-owner");
   });
 
-  it("retrying a failed defect targets its designated repository, not the altered global default", async () => {
-    // Defect originally failed targeting sandbox
+  it("retrying an uncreated failed defect uses the project's current repository configuration", async () => {
+    // Defect originally failed targeting sandbox before issue was created
     const failedDefect = await prisma.defect.create({
       data: {
         id: "defect-failed",
@@ -219,27 +278,71 @@ describe("Defect Sync with Dynamic Repository Selection", () => {
       },
     });
 
-    // When retrying, it must retry against the designated sandbox repository!
+    // When retrying an uncreated issue, it must retry against the project's current repository!
     const mockClient = {
       searchIssueByHash: vi.fn().mockResolvedValue(null),
       createIssue: vi.fn().mockResolvedValue({
         number: 402,
-        url: "https://github.com/sandbox-owner/sandbox-repo/issues/402",
-        title: "Retried Sandbox Issue",
+        url: "https://github.com/production-owner/internship-dtr/issues/402",
+        title: "Retried Production Issue",
       }),
     } as unknown as GitHubClient;
 
     const retryResult = await retryDefectSync(failedDefect.id, { githubClient: mockClient });
 
     expect(retryResult.defect.syncStatus).toBe(SyncStatus.SYNCED);
-    expect(retryResult.defect.githubOwner).toBe("sandbox-owner");
-    expect(retryResult.defect.githubRepo).toBe("sandbox-repo");
+    expect(retryResult.defect.githubOwner).toBe("production-owner");
+    expect(retryResult.defect.githubRepo).toBe("internship-dtr");
     expect(mockClient.createIssue).toHaveBeenCalledWith(
       expect.objectContaining({
-        owner: "sandbox-owner",
-        repo: "sandbox-repo",
+        owner: "production-owner",
+        repo: "internship-dtr",
       })
     );
+  });
+
+  it("retrying an already synced defect preserves its designated repository", async () => {
+    // Defect was previously successfully synced to sandbox
+    const syncedDefect = await prisma.defect.create({
+      data: {
+        id: "defect-synced",
+        projectId: "proj-repo-test",
+        failureSignatureId: "sig-repo-1",
+        githubOwner: "sandbox-owner",
+        githubRepo: "sandbox-repo",
+        githubIssueNumber: 101,
+        githubIssueUrl: "https://github.com/sandbox-owner/sandbox-repo/issues/101",
+        issueTitle: "Already Synced Sandbox Issue",
+        syncStatus: SyncStatus.SYNCED,
+      },
+    });
+
+    // Default repository is later changed to production
+    await prisma.gitHubConfig.update({
+      where: { projectId: "proj-repo-test" },
+      data: {
+        targetOwner: "production-owner",
+        targetRepo: "internship-dtr",
+      },
+    });
+
+    // When retrying an already synced defect, it must preserve its designated repository
+    const mockClient = {
+      searchIssueByHash: vi.fn().mockResolvedValue({
+        number: 101,
+        url: "https://github.com/sandbox-owner/sandbox-repo/issues/101",
+        title: "Already Synced Sandbox Issue",
+      }),
+      createIssue: vi.fn(),
+    } as unknown as GitHubClient;
+
+    const retryResult = await retryDefectSync(syncedDefect.id, { githubClient: mockClient });
+
+    expect(retryResult.alreadySynced).toBe(true);
+    expect(retryResult.defect.githubOwner).toBe("sandbox-owner");
+    expect(retryResult.defect.githubRepo).toBe("sandbox-repo");
+    expect(mockClient.createIssue).not.toHaveBeenCalled();
+    expect(mockClient.searchIssueByHash).not.toHaveBeenCalled();
   });
 
   it("handles GitHub API failures and stores error in lastSyncError", async () => {

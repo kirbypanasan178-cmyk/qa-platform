@@ -28,6 +28,7 @@ async function FailureDetailContent({ params }: FailureDetailPageProps) {
   }
 
   const latestDetail = failure.failureDetails[0];
+  const investigation = latestDetail?.testResult?.investigation;
 
   return (
     <main className="p-8 space-y-6 flex-1">
@@ -96,10 +97,56 @@ async function FailureDetailContent({ params }: FailureDetailPageProps) {
         )}
       </div>
 
+      {/* AI/Rule-Based Investigation Overview */}
+      {investigation && (
+        <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-zinc-100 dark:border-zinc-800 pb-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                  AI & Rule-Based Investigation
+                </span>
+                <span className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200">
+                  {investigation.classification.replace("_", " ")}
+                </span>
+                <span className="text-xs text-zinc-500">
+                  ({investigation.confidenceScore}% confidence)
+                </span>
+              </div>
+              <p className="text-xs text-zinc-600 dark:text-zinc-300">
+                {investigation.summary}
+              </p>
+            </div>
+            <Link
+              href={`/investigations/${investigation.id}`}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3.5 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:text-indigo-300 dark:hover:bg-indigo-950 transition-colors"
+            >
+              Open Investigation Details
+              <ExternalLink className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between text-xs gap-2 text-zinc-500 dark:text-zinc-400">
+            <div>
+              <span className="font-medium text-zinc-700 dark:text-zinc-300">Recommended Action: </span>
+              {investigation.recommendedAction}
+            </div>
+            <div>
+              <span className="font-medium text-zinc-700 dark:text-zinc-300">Triage Status: </span>
+              <span className="font-semibold text-zinc-900 dark:text-zinc-100">
+                {investigation.status.replace("_", " ")}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* GitHub Issue Action Card */}
       <GitHubIssueAction
         failureSignatureId={failure.id}
         initialDefect={failure.defect}
+        investigationStatus={investigation?.status || null}
+        investigationId={investigation?.id || null}
       />
 
       {/* Recent Run Occurrences */}

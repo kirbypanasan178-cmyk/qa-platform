@@ -154,6 +154,8 @@ describe("POST /api/v1/test-runs - Ingestion Endpoint", () => {
         testResult: { create: vi.fn().mockResolvedValue(mockTestResult) },
         failureSignature: { upsert: vi.fn().mockResolvedValue(mockSignature) },
         failureDetail: { create: vi.fn().mockResolvedValue({ id: "detail-1" }) },
+        investigation: { create: vi.fn().mockResolvedValue({ id: "inv-1" }) },
+        investigationHistory: { create: vi.fn().mockResolvedValue({ id: "inv-hist-1" }) },
       };
       return cb(tx);
     });

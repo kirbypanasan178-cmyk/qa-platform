@@ -98,6 +98,7 @@ export async function getFailureById(id: string) {
                     project: true,
                   },
                 },
+                investigation: true,
               },
             },
           },

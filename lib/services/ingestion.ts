@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { TestRunIngestionInput } from "@/lib/schemas/test-run";
 import { sanitizeText } from "@/lib/sanitizer";
 import { generateFailureSignature } from "@/lib/signature";
+import { getFailureAnalyzer } from "@/lib/analyzer";
 import { Prisma } from "@prisma/client";
 
 export interface IngestionResult {
@@ -158,13 +159,67 @@ export async function processTestRunIngestion(
           });
 
           // Create FailureDetail linked 1:1 to TestResult
-          await tx.failureDetail.create({
+          const createdDetail = await tx.failureDetail.create({
             data: {
               testResultId: createdTestResult.id,
               failureSignatureId: signature.id,
               rawErrorMessage: res.error.message.slice(0, 10000),
               sanitizedErrorMessage: sanitizedErrorMsg,
               sanitizedStackTrace: sanitizedStack,
+            },
+          });
+
+          const sanitizedExpected = res.error.expected ? sanitizeText(res.error.expected) : null;
+          const sanitizedActual = res.error.actual ? sanitizeText(res.error.actual) : null;
+          const sanitizedLogs = res.executionLogs ? res.executionLogs.map((l) => sanitizeText(l)) : [];
+
+          // Run automated rule-based failure analyzer
+          const analyzer = getFailureAnalyzer();
+          const analysis = await analyzer.analyze({
+            testTitle: res.testTitle,
+            testId: res.testId,
+            specFile: res.specFile,
+            role: res.role,
+            status: res.status,
+            durationMs: res.durationMs,
+            retryCount: res.retryCount,
+            errorMessage: sanitizedErrorMsg,
+            stackTrace: sanitizedStack,
+            errorType: res.error.errorType,
+            expected: sanitizedExpected,
+            actual: sanitizedActual,
+            executionLogs: sanitizedLogs,
+            apiResponses: res.apiResponses || [],
+            historicalOccurrences: signature.occurrenceCount,
+          });
+
+          // Store investigation separately from original test results
+          const investigation = await tx.investigation.create({
+            data: {
+              testResultId: createdTestResult.id,
+              failureDetailId: createdDetail.id,
+              classification: analysis.classification,
+              confidenceScore: analysis.confidenceScore,
+              summary: analysis.summary,
+              recommendedAction: analysis.recommendedAction,
+              detectedPatterns: analysis.detectedPatterns,
+              expectedResult: sanitizedExpected,
+              actualResult: sanitizedActual,
+              apiResponses: res.apiResponses ? (res.apiResponses as Prisma.InputJsonValue) : Prisma.JsonNull,
+              executionLogs: sanitizedLogs,
+              status: "PENDING_REVIEW",
+            },
+          });
+
+          // Record initial investigation history audit entry
+          await tx.investigationHistory.create({
+            data: {
+              investigationId: investigation.id,
+              fromStatus: "PENDING_REVIEW",
+              toStatus: "PENDING_REVIEW",
+              action: "AUTO_ANALYZED",
+              notes: `Rule-based assessment: ${analysis.classification} (${analysis.confidenceScore}% confidence)`,
+              performedBy: analyzer.name,
             },
           });
         }

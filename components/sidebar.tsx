@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   PlaySquare,
   AlertOctagon,
+  Sparkles,
   ShieldCheck,
   Settings,
 } from "lucide-react";
@@ -18,6 +19,7 @@ export function Sidebar() {
     { name: "Overview", href: "/", icon: LayoutDashboard },
     { name: "Test Runs", href: "/runs", icon: PlaySquare },
     { name: "Failures", href: "/failures", icon: AlertOctagon },
+    { name: "Investigations", href: "/investigations", icon: Sparkles },
     { name: "Settings", href: "/settings", icon: Settings },
   ];
 
