@@ -9,6 +9,8 @@ import {
 
 export type GitHubConnectionStatus = "CONNECTED" | "DISCONNECTED" | "NOT_CONFIGURED" | "INVALID_TOKEN";
 
+export type GitHubTokenType = "CLASSIC_PAT" | "FINE_GRAINED_PAT" | "APP" | "UNKNOWN" | null;
+
 export interface GitHubSettingsData {
   projectId: string;
   projectName: string;
@@ -17,6 +19,8 @@ export interface GitHubSettingsData {
   isConnected: boolean;
   hasTokenConfigured: boolean;
   tokenSource: "DATABASE" | "ENVIRONMENT" | "NONE";
+  tokenType?: GitHubTokenType;
+  tokenWarning?: string | null;
   accountLogin: string | null;
   accountType: string | null;
   installationId: string | null;
@@ -28,7 +32,20 @@ export interface GitHubSettingsData {
     title: string;
     description: string;
     requiredPermissions: string[];
+    tokenGuidance?: string[];
   };
+}
+
+/**
+ * Detects the GitHub token flavor based on standard token prefixes.
+ */
+export function determineTokenType(token?: string | null): GitHubTokenType {
+  if (!token) return null;
+  const t = token.trim();
+  if (t.startsWith("github_pat_")) return "FINE_GRAINED_PAT";
+  if (t.startsWith("ghp_")) return "CLASSIC_PAT";
+  if (t.startsWith("ghu_") || t.startsWith("ghs_")) return "APP";
+  return "UNKNOWN";
 }
 
 export class GitHubSettingsError extends Error {
@@ -170,6 +187,15 @@ export async function getGitHubSettings(projectId?: string): Promise<GitHubSetti
   const selectedRepoFullName =
     selectedOwner && selectedRepo ? `${selectedOwner}/${selectedRepo}` : null;
 
+  const activeToken = config?.token || (hasEnvToken ? process.env.GITHUB_TOKEN : null);
+  const tokenType = determineTokenType(activeToken);
+
+  let tokenWarning: string | null = null;
+  if (tokenType === "FINE_GRAINED_PAT") {
+    tokenWarning =
+      "Fine-Grained Personal Access Tokens (github_pat_...) are scoped only to resources owned by your personal account. They cannot access collaborator repositories owned by other individual users. If you need to sync with a private repository where you are a collaborator, switch to a Personal Access Token (classic) with the 'repo' scope.";
+  }
+
   return {
     projectId: project.id,
     projectName: project.name,
@@ -178,6 +204,8 @@ export async function getGitHubSettings(projectId?: string): Promise<GitHubSetti
     isConnected: status === "CONNECTED",
     hasTokenConfigured,
     tokenSource,
+    tokenType,
+    tokenWarning,
     accountLogin: config?.accountLogin || null,
     accountType: config?.accountType || null,
     installationId: config?.installationId || null,
@@ -187,11 +215,16 @@ export async function getGitHubSettings(projectId?: string): Promise<GitHubSetti
     setupInstructions: {
       title: "GitHub Authorization Setup",
       description:
-        "Connect QA-Platform CMS using a GitHub App installation or Fine-Grained Personal Access Token (PAT). Tokens are verified server-side and never exposed to the client.",
+        "Connect QA-Platform CMS using a Personal Access Token (classic), Fine-Grained PAT, or GitHub App. Tokens are verified server-side and never exposed to the client.",
       requiredPermissions: [
         "Repository Permissions: Issues -> Read and write (to create defect reports)",
         "Repository Permissions: Metadata -> Read-only (to list accessible repositories)",
-        "Optional: Workflows / Actions -> Read-only (for CI integration status)",
+        "Collaborator Repositories: If targeting a repository owned by another individual user, use a Personal Access Token (classic) with the 'repo' scope, as GitHub fine-grained PATs cannot access other users' personal repos.",
+      ],
+      tokenGuidance: [
+        "Personal Access Token (classic): Recommended for collaborator access across different user accounts. Requires 'repo' scope.",
+        "Fine-Grained PAT: Recommended for repositories owned directly by your personal account or organization.",
+        "GitHub App: Recommended for multi-tenant organizations.",
       ],
     },
   };

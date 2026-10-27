@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
 import {
   getGitHubSettings,
@@ -9,6 +9,7 @@ import {
   listAccessibleRepositories,
   createSandboxTestIssue,
   GitHubSettingsError,
+  determineTokenType,
 } from "@/lib/services/github-settings";
 import { GitHubApiError } from "@/lib/github/client";
 
@@ -23,21 +24,19 @@ describe("GitHub Settings & Repository Selection Service", () => {
     process.env.GITHUB_OWNER = "test-org";
     process.env.GITHUB_REPO = "sandbox-repo";
 
-    // Clean up test database records
-    await prisma.gitHubSyncEvent.deleteMany();
-    await prisma.defect.deleteMany();
-    await prisma.gitHubConfig.deleteMany();
-    await prisma.failureDetail.deleteMany();
-    await prisma.failureSignature.deleteMany();
-    await prisma.testResult.deleteMany();
-    await prisma.testRun.deleteMany();
-    await prisma.project.deleteMany();
+    // Clean up test-specific records only
+    await prisma.gitHubConfig.deleteMany({
+      where: { projectId: "proj-seed" },
+    });
+    await prisma.project.deleteMany({
+      where: { id: "proj-seed" },
+    });
 
     // Create a seed project
     await prisma.project.create({
       data: {
         id: "proj-seed",
-        key: "dtr-internship",
+        key: "dtr-settings-test",
         name: "Internship DTR",
         repositoryUrl: "https://github.com/test-org/dtr-internship",
       },
@@ -47,6 +46,15 @@ describe("GitHub Settings & Repository Selection Service", () => {
   afterEach(() => {
     process.env = { ...originalEnv };
     global.fetch = originalFetch;
+  });
+
+  afterAll(async () => {
+    await prisma.gitHubConfig.deleteMany({
+      where: { projectId: "proj-seed" },
+    });
+    await prisma.project.deleteMany({
+      where: { id: "proj-seed" },
+    });
   });
 
   describe("Retrieving Settings & Redacting Sensitive Information", () => {
@@ -62,6 +70,26 @@ describe("GitHub Settings & Repository Selection Service", () => {
       const serialized = JSON.stringify(settings);
       expect(serialized).not.toContain("ghp_mockservertoken12345");
       expect((settings as unknown as Record<string, unknown>).token).toBeUndefined();
+      expect(settings.tokenType).toBe("CLASSIC_PAT");
+      expect(settings.tokenWarning).toBeNull();
+    });
+
+    it("identifies fine-grained token and provides collaborator warning", async () => {
+      process.env.GITHUB_TOKEN = "github_pat_11BJH2HGI0xp3c1UiTdmPk_mock";
+      const settings = await getGitHubSettings("proj-seed");
+
+      expect(settings.tokenType).toBe("FINE_GRAINED_PAT");
+      expect(settings.tokenWarning).toContain("Fine-Grained Personal Access Tokens");
+      expect(settings.tokenWarning).toContain("Personal Access Token (classic)");
+    });
+
+    it("correctly identifies token flavors via determineTokenType", () => {
+      expect(determineTokenType("github_pat_12345")).toBe("FINE_GRAINED_PAT");
+      expect(determineTokenType("ghp_12345")).toBe("CLASSIC_PAT");
+      expect(determineTokenType("ghu_12345")).toBe("APP");
+      expect(determineTokenType("ghs_12345")).toBe("APP");
+      expect(determineTokenType("unknown_token")).toBe("UNKNOWN");
+      expect(determineTokenType(null)).toBeNull();
     });
 
     it("indicates NOT_CONFIGURED when no token is present", async () => {

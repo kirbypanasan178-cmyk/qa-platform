@@ -37,6 +37,8 @@ interface GitHubSettings {
   isConnected: boolean;
   hasTokenConfigured: boolean;
   tokenSource: "DATABASE" | "ENVIRONMENT" | "NONE";
+  tokenType?: "CLASSIC_PAT" | "FINE_GRAINED_PAT" | "APP" | "UNKNOWN" | null;
+  tokenWarning?: string | null;
   accountLogin: string | null;
   accountType: string | null;
   installationId: string | null;
@@ -47,6 +49,7 @@ interface GitHubSettings {
     title: string;
     description: string;
     requiredPermissions: string[];
+    tokenGuidance?: string[];
   };
 }
 
@@ -474,6 +477,17 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
+                {/* Token Warning (e.g. Fine-grained token collaborator limitations) */}
+                {settings.tokenWarning && settings.isConnected && (
+                  <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-3 text-xs text-amber-700 dark:text-amber-300 flex items-start gap-2.5">
+                    <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-amber-500" />
+                    <div>
+                      <span className="font-semibold">Collaborator Repositories Note: </span>
+                      {settings.tokenWarning}
+                    </div>
+                  </div>
+                )}
+
                 {/* Connection Controls */}
                 <div className="flex flex-wrap items-center gap-3">
                   {settings.isConnected ? (
@@ -613,6 +627,18 @@ export default function SettingsPage() {
                           ))}
                         </ul>
                       </div>
+                      {settings.setupInstructions.tokenGuidance && (
+                        <div className="space-y-1 pt-1">
+                          <div className="font-medium text-zinc-700 dark:text-zinc-300">
+                            Token Selection Guidance:
+                          </div>
+                          <ul className="list-disc pl-5 space-y-1 text-zinc-600 dark:text-zinc-400">
+                            {settings.setupInstructions.tokenGuidance.map((guide, i) => (
+                              <li key={i}>{guide}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
                       <div className="pt-2 border-t border-zinc-200 dark:border-zinc-800 text-zinc-500">
                         <span className="font-semibold text-zinc-700 dark:text-zinc-300">Security Note: </span>
                         Tokens are stored server-side with strict sanitization. Browser sessions never receive raw tokens, and stack traces are redacted before sync.
@@ -739,6 +765,11 @@ export default function SettingsPage() {
                             onChange={(e) => setManualRepo(e.target.value)}
                             className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 shadow-xs focus:border-zinc-400 focus:outline-hidden dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100"
                           />
+                        </div>
+
+                        <div className="sm:col-span-2 text-[11px] text-zinc-500 rounded-md bg-zinc-50 dark:bg-zinc-900/50 p-2.5 border border-zinc-200/80 dark:border-zinc-800">
+                          <span className="font-medium text-zinc-700 dark:text-zinc-300">Collaborator Repositories: </span>
+                          If targeting a private repository owned by another user account, GitHub requires a Personal Access Token (classic) with <code>repo</code> scope. Fine-grained PATs cannot access other users&apos; private repositories.
                         </div>
                       </div>
                     )}

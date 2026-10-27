@@ -138,4 +138,20 @@ describe("RuleBasedFailureAnalyzer", () => {
     expect(result.classification).toBe("INCONCLUSIVE");
     expect(result.confidenceScore).toBeLessThanOrEqual(50);
   });
+
+  it("classifies contradictory/inverted negative assertions as TEST_DEFECT rather than application bug", () => {
+    const evidence: FailureEvidence = {
+      ...baseEvidence,
+      testTitle: "non-numeric intern profile id or dtr submission id should not return 500",
+      specFile: "Playwright-local/tests/security/coordinator-access-control.spec.js",
+      errorMessage: "Error: expect(received).toContain(expected) // indexOf\n\nExpected value: 500\nReceived array: [404, 400]",
+      stackTrace: "at coordinator-access-control.spec.js:55:24",
+    };
+
+    const result = analyzer.analyze(evidence);
+    expect(result.classification).toBe("TEST_DEFECT");
+    expect(result.confidenceScore).toBeGreaterThanOrEqual(85);
+    expect(result.detectedPatterns[0]).toContain("Contradictory or Inverted Test Assertion");
+    expect(result.summary).toContain("inverted test assertion or test defect");
+  });
 });

@@ -83,6 +83,7 @@
 - [x] Dynamic default repository selection with PostgreSQL persistence.
 - [x] Defect repository preservation: existing defects retain original repo identity when default changes.
 - [x] Dynamic retry for uncreated defects: Retrying defects that never successfully created an issue adopts the project's current repository configuration.
+- [x] Standardized 11-section developer-friendly GitHub Issue report format with automated assertion defect detection.
 - [x] Manual sandbox verification issue creation endpoint and dashboard action.
 
 **Acceptance criteria:** A user can create an issue from a failure, see the issue link, and retry a failed synchronization without creating accidental duplicates.
@@ -136,6 +137,7 @@
 | 2026-10-26 | CMS is a separate project that receives Playwright results and connects to GitHub | Proposed direction | Keep it separate from the Internship DTR application initially. |
 | 2026-10-26 | Prevent duplicate GitHub Issues for recurring failures | Required | Use a stable failure signature and store the linked issue. |
 | 2026-10-26 | Which app stack/database/authentication? | Open | Confirm before implementation locks in choices. |
+| 2026-10-27 | Dynamic GitHub Repo Discovery & Collaborator Token Resolution | Completed and verified | Fine-Grained PATs cannot access collaborator repos owned by other personal accounts by GitHub architecture; Personal Access Token (classic) with `repo` scope required. Added RFC 5988 link pagination, expanded collaborator permissions (triage/maintain), and database-isolated test suites. |
 
 ## Session handoff template
 

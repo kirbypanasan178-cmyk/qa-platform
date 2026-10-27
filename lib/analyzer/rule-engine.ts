@@ -32,6 +32,30 @@ export class RuleBasedFailureAnalyzer implements FailureAnalyzer {
     const fixtureHookMatch = /beforeAll hook timeout|beforeEach hook timeout|afterAll hook timeout|afterEach hook timeout|fixture .* failed|Test timeout of \d+ms exceeded while setting up/i.test(combinedText);
     const missingFixtureLaunch = /browserType\.launch: Executable doesn't exist|Cannot read properties of undefined \(reading 'goto'\)/i.test(combinedText);
 
+    // Contradictory / inverted test assertion check (e.g. test specification says "should not return 500" but assertion expected 500 or inverted expect().toContain() arguments)
+    const negativeTestContradictionMatch =
+      (/should not return|never leaks|should not|not return/i.test(evidence.testTitle) &&
+        /Expected.*:?\s*50[0-9]/i.test(combinedText) &&
+        /Received.*:?\s*\[?(?:40[0-9]|20[0-9]|30[0-9])/i.test(combinedText)) ||
+      (/expect\(received\)\.toContain\(expected\)/i.test(combinedText) &&
+        /Expected value:\s*50[0-9]/i.test(combinedText) &&
+        /Received array:\s*\[?(?:40[0-9]|20[0-9]|30[0-9])/i.test(combinedText));
+
+    if (negativeTestContradictionMatch) {
+      detectedPatterns.push(
+        "Contradictory or Inverted Test Assertion (Test specifies 'should not return 500' but assertion expected 500 against received [404, 400])"
+      );
+      return {
+        classification: "TEST_DEFECT",
+        confidenceScore: 85,
+        summary:
+          "Failure appears to be an inverted test assertion or test defect. The test expects 500 while received status is [404, 400] or test title specifies 'should not return 500'.",
+        recommendedAction:
+          "Verify actual endpoint response codes and correct the test assertion in the spec file to avoid asserting 500 or inverted expect().toContain() arguments.",
+        detectedPatterns,
+      };
+    }
+
     if (strictModeMatch) detectedPatterns.push("Playwright Strict Mode Violation (Multiple matching elements found)");
     if (invalidSelectorMatch) detectedPatterns.push("Invalid or Malformed DOM Selector Syntax");
     if (fixtureHookMatch) detectedPatterns.push("Test Hook or Fixture Setup Timeout/Failure");

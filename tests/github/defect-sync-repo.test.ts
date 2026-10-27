@@ -6,6 +6,7 @@ import { SyncStatus } from "@prisma/client";
 
 describe("Defect Sync with Dynamic Repository Selection", () => {
   const originalEnv = { ...process.env };
+  let testProjectId: string;
 
   beforeEach(async () => {
     vi.restoreAllMocks();
@@ -16,10 +17,10 @@ describe("Defect Sync with Dynamic Repository Selection", () => {
 
     // Clean test-specific records
     await prisma.gitHubSyncEvent.deleteMany({
-      where: { defect: { projectId: "proj-repo-test" } },
+      where: { defect: { failureSignatureId: { in: ["sig-repo-1", "sig-repo-2"] } } },
     });
     await prisma.defect.deleteMany({
-      where: { projectId: "proj-repo-test" },
+      where: { failureSignatureId: { in: ["sig-repo-1", "sig-repo-2"] } },
     });
     await prisma.failureDetail.deleteMany({
       where: { id: "fd-repo-1" },
@@ -36,7 +37,7 @@ describe("Defect Sync with Dynamic Repository Selection", () => {
 
     // Ensure Seed Project exists
     const project = await prisma.project.upsert({
-      where: { id: "proj-repo-test" },
+      where: { key: "dtr-internship" },
       create: {
         id: "proj-repo-test",
         key: "dtr-internship",
@@ -44,10 +45,10 @@ describe("Defect Sync with Dynamic Repository Selection", () => {
         repositoryUrl: "https://github.com/production-owner/internship-dtr",
       },
       update: {
-        key: "dtr-internship",
         name: "Internship DTR",
       },
     });
+    testProjectId = project.id;
 
     // Create GitHub Config targeting Sandbox Repo initially
     await prisma.gitHubConfig.upsert({
@@ -135,20 +136,23 @@ describe("Defect Sync with Dynamic Repository Selection", () => {
     });
 
     // Restore project GitHubConfig to user's saved repository
-    await prisma.gitHubConfig.upsert({
-      where: { projectId: "proj-repo-test" },
-      create: {
-        projectId: "proj-repo-test",
-        isConnected: true,
-        targetOwner: "KiyoshiGamer",
-        targetRepo: "MERN-STACK",
-      },
-      update: {
-        isConnected: true,
-        targetOwner: "KiyoshiGamer",
-        targetRepo: "MERN-STACK",
-      },
-    });
+    const proj = await prisma.project.findFirst({ where: { key: "dtr-internship" } });
+    if (proj) {
+      await prisma.gitHubConfig.upsert({
+        where: { projectId: proj.id },
+        create: {
+          projectId: proj.id,
+          isConnected: true,
+          targetOwner: "KiyoshiGamer",
+          targetRepo: "MERN-STACK",
+        },
+        update: {
+          isConnected: true,
+          targetOwner: "KiyoshiGamer",
+          targetRepo: "MERN-STACK",
+        },
+      });
+    }
   });
 
   it("creates issue in configured sandbox repository and stores repository identity on defect", async () => {
@@ -192,7 +196,7 @@ describe("Defect Sync with Dynamic Repository Selection", () => {
     await prisma.defect.create({
       data: {
         id: "defect-sandbox",
-        projectId: "proj-repo-test",
+        projectId: testProjectId,
         failureSignatureId: "sig-repo-1",
         githubOwner: "sandbox-owner",
         githubRepo: "sandbox-repo",
@@ -205,7 +209,7 @@ describe("Defect Sync with Dynamic Repository Selection", () => {
 
     // 2. User changes default repository configuration to Production Internship DTR
     await prisma.gitHubConfig.update({
-      where: { projectId: "proj-repo-test" },
+      where: { projectId: testProjectId },
       data: {
         targetOwner: "production-owner",
         targetRepo: "internship-dtr",
@@ -259,7 +263,7 @@ describe("Defect Sync with Dynamic Repository Selection", () => {
     const failedDefect = await prisma.defect.create({
       data: {
         id: "defect-failed",
-        projectId: "proj-repo-test",
+        projectId: testProjectId,
         failureSignatureId: "sig-repo-1",
         githubOwner: "sandbox-owner",
         githubRepo: "sandbox-repo",
@@ -271,7 +275,7 @@ describe("Defect Sync with Dynamic Repository Selection", () => {
 
     // Default repository is later changed to production
     await prisma.gitHubConfig.update({
-      where: { projectId: "proj-repo-test" },
+      where: { projectId: testProjectId },
       data: {
         targetOwner: "production-owner",
         targetRepo: "internship-dtr",
@@ -306,7 +310,7 @@ describe("Defect Sync with Dynamic Repository Selection", () => {
     const syncedDefect = await prisma.defect.create({
       data: {
         id: "defect-synced",
-        projectId: "proj-repo-test",
+        projectId: testProjectId,
         failureSignatureId: "sig-repo-1",
         githubOwner: "sandbox-owner",
         githubRepo: "sandbox-repo",
@@ -319,7 +323,7 @@ describe("Defect Sync with Dynamic Repository Selection", () => {
 
     // Default repository is later changed to production
     await prisma.gitHubConfig.update({
-      where: { projectId: "proj-repo-test" },
+      where: { projectId: testProjectId },
       data: {
         targetOwner: "production-owner",
         targetRepo: "internship-dtr",

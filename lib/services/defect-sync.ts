@@ -67,7 +67,7 @@ export async function createOrSyncDefect(
           testResult: {
             include: {
               testRun: {
-                select: { projectId: true },
+                include: { project: true },
               },
               investigation: true,
             },
@@ -339,7 +339,14 @@ export async function retryDefectSync(
             take: 1,
             orderBy: { createdAt: "desc" },
             include: {
-              testResult: true,
+              testResult: {
+                include: {
+                  testRun: {
+                    include: { project: true },
+                  },
+                  investigation: true,
+                },
+              },
             },
           },
         },

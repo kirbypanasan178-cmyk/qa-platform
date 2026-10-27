@@ -58,6 +58,22 @@ export interface ConnectionTestResult {
  * Server-side GitHub API client with timeout protection,
  * rate limit detection, repository querying, and structured error handling.
  */
+/**
+ * Parses RFC 5988 Link header and extracts the URL with rel="next" if present.
+ */
+function extractNextPageUrl(linkHeader: string | null): string | null {
+  if (!linkHeader) return null;
+  const parts = linkHeader.split(",");
+  for (const part of parts) {
+    const section = part.trim();
+    if (section.includes('rel="next"') || section.includes("rel='next'")) {
+      const match = section.match(/<([^>]+)>/);
+      if (match) return match[1];
+    }
+  }
+  return null;
+}
+
 export class GitHubClient {
   private token: string;
   private defaultOwner: string;
@@ -182,76 +198,109 @@ export class GitHubClient {
 
   /**
    * Retrieves repositories accessible to the authorized integration.
+   * Traverses RFC 5988 Link pagination across personal, collaborator, and organization repos.
    * Excludes archived repositories and repositories where issues cannot be created.
    */
-  async listAccessibleRepositories(): Promise<AccessibleRepository[]> {
+  async listAccessibleRepositories(maxPages = 5): Promise<AccessibleRepository[]> {
     if (!this.token) {
       throw new GitHubApiError("GITHUB_TOKEN is not configured on the server", 401);
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    type RawGitHubRepo = {
+      id: number;
+      full_name: string;
+      name: string;
+      owner: { login: string };
+      private: boolean;
+      description: string | null;
+      default_branch: string;
+      html_url: string;
+      permissions?: {
+        admin?: boolean;
+        push?: boolean;
+        pull?: boolean;
+        triage?: boolean;
+        maintain?: boolean;
+      };
+      has_issues?: boolean;
+      archived?: boolean;
+    };
 
-    try {
-      // 1. Try /user/repos for PAT and OAuth tokens
-      const userReposRes = await fetch(
-        `${this.baseUrl}/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member`,
-        {
+    const allRepos: RawGitHubRepo[] = [];
+    const seenRepoIds = new Set<number>();
+
+    // 1. Traverse /user/repos with pagination (PAT and OAuth tokens)
+    let nextUrl: string | null = `${this.baseUrl}/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member&visibility=all`;
+    let pageCount = 0;
+    let appFallbackNeeded = false;
+
+    while (nextUrl && pageCount < maxPages) {
+      pageCount++;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+
+      try {
+        const userReposRes = await fetch(nextUrl, {
           method: "GET",
           headers: this.getHeaders(),
           signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+
+        if (userReposRes.status === 401) {
+          throw new GitHubApiError("Invalid or expired GitHub credentials", 401);
         }
-      );
 
-      clearTimeout(timeout);
+        if (pageCount === 1 && (userReposRes.status === 403 || userReposRes.status === 404)) {
+          appFallbackNeeded = true;
+          break;
+        }
 
-      if (userReposRes.status === 401) {
-        throw new GitHubApiError("Invalid or expired GitHub credentials", 401);
-      }
+        if (!userReposRes.ok) {
+          let errMessage = `Failed to list repositories (Status ${userReposRes.status})`;
+          try {
+            const errJson = (await userReposRes.json()) as { message?: string };
+            if (errJson.message) errMessage = errJson.message;
+          } catch {
+            // ignore
+          }
+          throw new GitHubApiError(errMessage, userReposRes.status);
+        }
 
-      if (userReposRes.ok) {
-        const repos = (await userReposRes.json()) as Array<{
-          id: number;
-          full_name: string;
-          name: string;
-          owner: { login: string };
-          private: boolean;
-          description: string | null;
-          default_branch: string;
-          html_url: string;
-          permissions?: { admin?: boolean; push?: boolean; pull?: boolean };
-          has_issues?: boolean;
-          archived?: boolean;
-        }>;
-
-        return repos
-          .filter((r) => !r.archived && r.has_issues !== false)
-          .filter((r) => {
-            if (r.permissions) {
-              return r.permissions.push === true || r.permissions.admin === true;
+        const repos = (await userReposRes.json()) as RawGitHubRepo[];
+        if (Array.isArray(repos)) {
+          for (const repo of repos) {
+            if (!seenRepoIds.has(repo.id)) {
+              seenRepoIds.add(repo.id);
+              allRepos.push(repo);
             }
-            return true;
-          })
-          .map((r) => ({
-            id: r.id,
-            fullName: r.full_name,
-            name: r.name,
-            owner: r.owner.login,
-            isPrivate: r.private,
-            description: r.description,
-            defaultBranch: r.default_branch,
-            htmlUrl: r.html_url,
-            canCreateIssues: true,
-          }));
-      }
+          }
+        }
 
-      // 2. Try /installation/repositories for GitHub App tokens
-      if (userReposRes.status === 403 || userReposRes.status === 404) {
+        nextUrl = extractNextPageUrl(userReposRes.headers.get("link"));
+      } catch (err) {
+        clearTimeout(timeout);
+        if (err instanceof GitHubApiError) throw err;
+        if ((err as Error)?.name === "AbortError") {
+          throw new GitHubApiError("GitHub API request timed out after 10000ms", 504);
+        }
+        throw new GitHubApiError((err as Error)?.message || "Failed to communicate with GitHub API", 502);
+      }
+    }
+
+    // 2. Try /installation/repositories for GitHub App tokens if /user/repos is forbidden/not found
+    if (appFallbackNeeded) {
+      let appNextUrl: string | null = `${this.baseUrl}/installation/repositories?per_page=100`;
+      let appPageCount = 0;
+
+      while (appNextUrl && appPageCount < maxPages) {
+        appPageCount++;
         const appController = new AbortController();
         const appTimeout = setTimeout(() => appController.abort(), 10000);
 
         try {
-          const appRes = await fetch(`${this.baseUrl}/installation/repositories?per_page=100`, {
+          const appRes = await fetch(appNextUrl, {
             method: "GET",
             headers: this.getHeaders(),
             signal: appController.signal,
@@ -260,56 +309,53 @@ export class GitHubClient {
 
           if (appRes.ok) {
             const data = (await appRes.json()) as {
-              repositories?: Array<{
-                id: number;
-                full_name: string;
-                name: string;
-                owner: { login: string };
-                private: boolean;
-                description: string | null;
-                default_branch: string;
-                html_url: string;
-                permissions?: { admin?: boolean; push?: boolean; pull?: boolean };
-                has_issues?: boolean;
-                archived?: boolean;
-              }>;
+              repositories?: RawGitHubRepo[];
             };
-
-            return (data.repositories || [])
-              .filter((r) => !r.archived && r.has_issues !== false)
-              .map((r) => ({
-                id: r.id,
-                fullName: r.full_name,
-                name: r.name,
-                owner: r.owner.login,
-                isPrivate: r.private,
-                description: r.description,
-                defaultBranch: r.default_branch,
-                htmlUrl: r.html_url,
-                canCreateIssues: true,
-              }));
+            if (data.repositories && Array.isArray(data.repositories)) {
+              for (const repo of data.repositories) {
+                if (!seenRepoIds.has(repo.id)) {
+                  seenRepoIds.add(repo.id);
+                  allRepos.push(repo);
+                }
+              }
+            }
+            appNextUrl = extractNextPageUrl(appRes.headers.get("link"));
+          } else {
+            break;
           }
         } catch {
           clearTimeout(appTimeout);
+          break;
         }
       }
-
-      let errMessage = `Failed to list repositories (Status ${userReposRes.status})`;
-      try {
-        const errJson = (await userReposRes.json()) as { message?: string };
-        if (errJson.message) errMessage = errJson.message;
-      } catch {
-        // ignore
-      }
-      throw new GitHubApiError(errMessage, userReposRes.status);
-    } catch (err: unknown) {
-      clearTimeout(timeout);
-      if (err instanceof GitHubApiError) throw err;
-      if ((err as Error)?.name === "AbortError") {
-        throw new GitHubApiError("GitHub API request timed out after 10000ms", 504);
-      }
-      throw new GitHubApiError((err as Error)?.message || "Failed to communicate with GitHub API", 502);
     }
+
+    return allRepos
+      .filter((r) => !r.archived && r.has_issues !== false)
+      .filter((r) => {
+        if (r.permissions) {
+          // Allow repositories where user has admin, push (write), maintain, triage, or pull (read) access
+          return (
+            r.permissions.admin === true ||
+            r.permissions.push === true ||
+            r.permissions.maintain === true ||
+            r.permissions.triage === true ||
+            r.permissions.pull === true
+          );
+        }
+        return true;
+      })
+      .map((r) => ({
+        id: r.id,
+        fullName: r.full_name,
+        name: r.name,
+        owner: r.owner.login,
+        isPrivate: r.private,
+        description: r.description,
+        defaultBranch: r.default_branch,
+        htmlUrl: r.html_url,
+        canCreateIssues: true,
+      }));
   }
 
   /**
@@ -339,8 +385,13 @@ export class GitHubClient {
       clearTimeout(timeout);
 
       if (response.status === 404) {
+        let fineGrainedHint = "";
+        if (this.token.startsWith("github_pat_")) {
+          fineGrainedHint =
+            " Note: The active token is a Fine-Grained Personal Access Token (github_pat_...). GitHub strictly restricts fine-grained tokens to resources owned by the token creator and cannot access repositories owned by other individual users (even if you are a collaborator). To access this collaborator repository, use a Personal Access Token (classic) with the 'repo' scope.";
+        }
         throw new GitHubApiError(
-          `Repository '${owner}/${repo}' was not found or the integration lacks access permissions`,
+          `Repository '${owner}/${repo}' was not found or the integration lacks access permissions.${fineGrainedHint}`,
           404
         );
       }
@@ -361,12 +412,41 @@ export class GitHubClient {
       }
 
       const data = (await response.json()) as {
-        permissions?: { admin?: boolean; push?: boolean; pull?: boolean };
+        archived?: boolean;
+        has_issues?: boolean;
+        permissions?: {
+          admin?: boolean;
+          push?: boolean;
+          pull?: boolean;
+          triage?: boolean;
+          maintain?: boolean;
+        };
       };
 
-      if (data.permissions && data.permissions.push === false && data.permissions.admin === false) {
+      if (data.archived) {
         throw new GitHubApiError(
-          `The integration does not have write permissions for repository '${owner}/${repo}'`,
+          `Repository '${owner}/${repo}' is archived and cannot accept new issues`,
+          400
+        );
+      }
+
+      if (data.has_issues === false) {
+        throw new GitHubApiError(
+          `Issues are disabled for repository '${owner}/${repo}' on GitHub`,
+          400
+        );
+      }
+
+      if (
+        data.permissions &&
+        data.permissions.push === false &&
+        data.permissions.admin === false &&
+        data.permissions.triage === false &&
+        data.permissions.maintain === false &&
+        data.permissions.pull === false
+      ) {
+        throw new GitHubApiError(
+          `The integration does not have access permissions for repository '${owner}/${repo}'`,
           403
         );
       }
